@@ -4,12 +4,23 @@
 # Import built in packages
 #
 import logging
+import platform
 import os
 import time
 import socket
 import subprocess
 import signal
 import psutil
+import re
+
+# Import 3th party modules:
+#  - wexpect/pexpect to launch ant interact with subprocesses.
+if platform.system() == 'Windows':
+    import wexpect as expect
+    print(expect.__version__)
+else: # Linux
+    import pexpect as expect
+
 
 # The directory of this script file.
 __here__ = os.path.dirname(os.path.realpath(__file__))
@@ -22,6 +33,7 @@ __here__ = os.path.dirname(os.path.realpath(__file__))
 # based on that variable. The default is the WARNING level.
 try:
     logger_level = os.environ['PYSCT_LOGGER_LEVEL']
+    print(logger_level)
 except KeyError as _:
     logger_level = logging.WARNING
 
@@ -42,7 +54,7 @@ HOST = '127.0.0.1'  # Standard loop-back interface address (localhost)
 PORT = 4567
 
 
-class PysctException(Exception):
+class PyXilException(Exception):
     """The exception for this project.
     """
     pass
@@ -210,21 +222,147 @@ class Xsct:
         if ans.startswith('okay'):
             return ans[5:]
         if ans.startswith('error'):
-            raise PysctException(ans[6:])
-        raise PysctException('Illegal start-string in protocol. Answer is: ' + ans)
+            raise PyXilException(ans[6:])
+        raise PyXilException('Illegal start-string in protocol. Answer is: ' + ans)
 
+
+default_vivado_prompt = 'Vivado% '
+
+class Vivado():
+    '''Vivado is a native interface towards the Vivado TCL console. You can run TCL commands in it
+    using do() method. This is a quasi state-less class
+    '''
+
+    def __init__(self, executable, args=['-mode', 'tcl'], name='Vivado_01', prompt=default_vivado_prompt):
+        self.childProc = None
+        self.name = name
+        self.prompt = prompt
+        
+        if executable is not None: # None is fake run
+            self.childProc = expect.spawn(executable, args)
+        
+        
+    def waitStartup(self, prompt=None):
+        if prompt is None:
+            prompt = self.prompt
+        self.childProc.expect(prompt)
+        # print the texts
+        logger.debug(self.childProc.before + self.childProc.match.group(0))
+        
+        
+    def do(self, cmd, prompt=None, wait_prompt=True, puts=False, errmsgs=[], encoding="utf-8", native_answer=False):
+        ''' do a simple command in Vivado console
+        '''
+        if isinstance(cmd, str):
+            cmd = cmd.encode()
+        if self.childProc.terminated:
+            logger.error('The process has been terminated. Sending command is not possible.')
+            raise PyXilException('The process has been terminated. Sending command is not possible.')
+        self.childProc.sendline(cmd)
+        if prompt is None:
+            prompt = self.prompt
+        if wait_prompt:
+            self.childProc.expect(prompt)
+            logger.debug(str(cmd) + str(self.childProc.before) + str(self.childProc.match.group(0)))
+            for em in errmsgs:
+                if em.search(self.childProc.before):
+                    logger.error('during running command: ' + repr(cmd) + repr(self.childProc.before))
+                    raise PyXilException('during running command: ' + repr(cmd) + repr(self.childProc.before))
+            if puts:
+                print(cmd, end='')
+                print(self.childProc.before, end='')
+                print(self.childProc.match.group(0), end='')
+                
+            ans = self.childProc.before.decode(encoding)
+            if native_answer:
+                return ans
+            else:
+                # remove first line, which is always empty
+                ans = os.linesep.join(ans.splitlines()[1:-1])
+                return ans
+                
+        return None
+        
+    def get_var(self, varname):
+        no_var_msg = 'can\'t read "{}": no such variable'.format(varname)
+        # print(no_var_msg)
+        errmsgs = [re.compile(no_var_msg.encode())]
+        command = 'puts ${}'.format(varname)
+        ans = self.do(command, errmsgs=errmsgs)
+        
+        return ans
+
+    def set_var(self, varname, value):
+        command = 'set {} {}'.format(varname, value)
+        
+        ans = self.do(command)
+        
+        return ans
+    
+    def get_property(self, propName, objectName, prompt=None, puts=False):
+        ''' does a get_property command in vivado terminal. 
+        
+        It fetches the given property and returns it.
+        '''
+        cmd = 'get_property {} {}'.format(propName, objectName)
+        self.do(cmd, prompt=prompt, puts=puts)
+        val = [x for x in self.childProc.before.splitlines() if x ]
+        return val[0]
+    
+    
+    def set_property(self, propName, value, objectName, prompt=None, puts=False):
+        ''' Sets a property.
+        '''
+        cmd = 'set_property {} {} {}'.format(propName, value, objectName)
+        self.do(cmd, prompt=prompt, puts=puts)
+        
+        
+    def exit(self):
+        if self.childProc is None:
+            return None
+        if self.childProc.terminated:
+            logger.warning('This process has been terminated.')
+            return None
+        else:
+            self.do('exit', wait_prompt=False)
+            return self.childProc.wait()
+        
 
 if __name__ == '__main__':
     """A small example of usage.
     """
-    win_xsct_executable = r'C:\Xilinx\SDK\2017.4\bin\xsct.bat'
-    xsct_server = XsctServer(win_xsct_executable, port=PORT, verbose=False)
-    xsct = Xsct('localhost', PORT)
+    test_xsct = False
+    test_vivado = True
     
-    print("xsct's pid: {}".format(xsct.do('pid')))
-    print(xsct.do('set a 5'))
-    print(xsct.do('set b 4'))
-    print("5+4={}".format(xsct.do('expr $a + $b')))
+    
+    if test_xsct:
+        win_xsct_executable = r'C:\Xilinx\SDK\2017.4\bin\xsct.bat'
+        xsct_server = XsctServer(win_xsct_executable, port=PORT, verbose=False)
+        xsct = Xsct('localhost', PORT)
+        
+        print("xsct's pid: {}".format(xsct.do('pid')))
+        print(xsct.do('set a 5'))
+        print(xsct.do('set b 4'))
+        print("5+4={}".format(xsct.do('expr $a + $b')))
 
-    xsct.close()
-    xsct_server.stop_server()
+        xsct.close()
+        xsct_server.stop_server()
+    if test_vivado:
+        # Path of Vivado executable:
+        if platform.system() == 'Windows':
+            vivadoPath = 'C:/Xilinx/Vivado/2017.4/bin/vivado.bat'
+        else: # Linux
+            vivadoPath = 'vivado'
+            vivadoPath = '/home/beton/Xilinx/Vivado/2017.4/bin/vivado'
+            vivadoPath = 'tclsh'
+    
+        vivado = Vivado(vivadoPath, prompt='%')
+        vivado.waitStartup()
+        print(vivado.do(b'pid'))
+        print(vivado.set_var('a', '5'))
+        print(vivado.set_var('b', '[expr $a + 4]'))
+        print("5+4={}".format(vivado.get_var('b')))
+        print("5+4={}".format(vivado.get_var('c')))
+        vivado.exit()
+        
+        

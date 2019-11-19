@@ -9,17 +9,17 @@ This package based on the following requiremets:
 ## Example
 
 ```python
-    win_xsct_executable = r'C:\Xilinx\SDK\2017.4\bin\xsct.bat'
-    xsct_server = XsctServer(win_xsct_executable, port=PORT, verbose=False)
-    xsct = Xsct('localhost', PORT)
-    
-    print("xsct's pid: {}".format(xsct.do('pid')))
-    print(xsct.do('set a 5'))
-    print(xsct.do('set b 4'))
-    print("5+4={}".format(xsct.do('expr $a + $b')))
+win_xsct_executable = r'C:\Xilinx\SDK\2017.4\bin\xsct.bat'
+xsct_server = XsctServer(win_xsct_executable, port=PORT, verbose=False)
+xsct = Xsct('localhost', PORT)
 
-    xsct.close()
-    xsct_server.stop_server()
+print("xsct's pid: {}".format(xsct.do('pid')))
+print(xsct.do('set a 5'))
+print(xsct.do('set b 4'))
+print("5+4={}".format(xsct.do('expr $a + $b')))
+
+xsct.close()
+xsct_server.stop_server()
 ```
 
 Prints out:
